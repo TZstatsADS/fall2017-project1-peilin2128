@@ -1,0 +1,336 @@
+---
+title: 'Why Donald ''Trump''? '
+output:
+  html_document: default
+  html_notebook: default
+---
+
+![image](https://cdn.theatlantic.com/assets/media/img/2016/08/29/WEL_Fallows_header_2000/1920.jpg?1473711424)
+
+
+
+# Introduction
+Donald J. Trump is the current President of the United States since January 2017. However, before the President election Trump is only well known for his wealth and success in business. For example, according to Forbes, Trump was the 544th richest person in the world with an estimated net worth of $3.5 billion dollars as of 2017. Interestingly, although Trump had few political experience before the election, he beated his main opponent Hillary Clinton who is a famous politician and the wife of Bill Clinton. Thus, the question is how did Donald "trump" Hillary in the general election? 
+
+
+The aim of this project is to seek out some insteresting "facts" between their nomination speeches through text mining, sentiment analysis and topic modeling.  
+
+**Step 0 - Install and load libraries**
+
+```{r, message=FALSE, warning=FALSE}
+packages.used=c("rvest", "tibble", "qdap", 
+                "sentimentr", "gplots", "dplyr",
+                "tm", "syuzhet", "factoextra", 
+                "beeswarm", "scales", "RColorBrewer",
+                "RANN", "tm", "topicmodels")
+
+# check packages that need to be installed.
+packages.needed=setdiff(packages.used, 
+                        intersect(installed.packages()[,1], 
+                                  packages.used))
+# install additional packages
+if(length(packages.needed)>0){
+  install.packages(packages.needed, dependencies = TRUE)
+}
+
+# load packages
+library("rvest")
+library("tibble")
+library("qdap")
+library("sentimentr")
+library("gplots")
+library("dplyr")
+library("tm")
+library("syuzhet")
+library("factoextra")
+library("beeswarm")
+library("scales")
+library("RColorBrewer")
+library("RANN")
+library("tm")
+library("topicmodels")
+
+source("../lib/plotstacked.R")
+source("../lib/speechFuncs.R")
+
+```
+
+This notebook was prepared with the following environmental settings.
+```{r}
+print(R.version)
+```
+
+# Part I Sentence Analysis
+In this part, we will compare the length of sentences between their two nomination speeches. The assumption under this part of analysis is that speeches with more lengthy sentences are less approachable to people while speeches with less lengthy sentences are more emotional.
+
+**Step 1: Data Processing**
+
+scrap speech URLs from <http://www.presidency.ucsb.edu/> and the texts of speeches from the speech URLs.
+
+```{r, message=FALSE, warning=FALSE}
+main.page <- read_html("http://www.presidency.ucsb.edu/nomination.php")
+nomin <- f.speechlinks(main.page)
+nomin.list=read.csv("../data/nominlist.csv", stringsAsFactors = FALSE)
+names(nomin.list)[1] <- paste("President")
+nomin <- nomin[which(nomin$links=="Hillary Clinton"|nomin$links=="Donald J. Trump"),]
+nomin.list <- nomin.list[which(nomin.list$President=="Hillary Clinton"|nomin.list$President=="Donald J. Trump"),]
+nomin.list$type <- c(rep("nomin", nrow(nomin.list)))
+speech.list=cbind(nomin.list, nomin)
+```
+
+**Step 2: Sentence Generating and Assigning Emotion Scores**
+
+Generate list of sentences and assign emotion scores to each sentence. We will analyze these sentences in the remaining project.
+
+```{r, message=FALSE, warning=FALSE}
+# Loop over each row in speech.list
+speech.list$fulltext=NA
+for(i in seq(nrow(speech.list))) {
+  text <- read_html(speech.list$urls[i]) %>% # load the page
+    html_nodes(".displaytext") %>% # isloate the text
+    html_text() # get the text
+  speech.list$fulltext[i]=text
+  # Create the file name
+  filename <- paste0("../data/fulltext/", 
+                     speech.list$type[i],
+                     speech.list$File[i], "-", 
+                     speech.list$Term[i], ".txt")
+  sink(file = filename) %>% # open file to write 
+  cat(text)  # write the file
+  sink() # close the file
+}
+
+sentence.list=NULL
+for(i in 1:nrow(speech.list)){
+  sentences=sent_detect(speech.list$fulltext[i],
+                        endmarks = c("?", ".", "!", "|",";"))
+  if(length(sentences)>0){
+    emotions=get_nrc_sentiment(sentences)
+    word.count=word_count(sentences)
+    # colnames(emotions)=paste0("emo.", colnames(emotions))
+    # in case the word counts are zeros?
+    emotions=diag(1/(word.count+0.01))%*%as.matrix(emotions)
+    sentence.list=rbind(sentence.list, 
+                        cbind(speech.list[i,-ncol(speech.list)],
+                              sentences=as.character(sentences), 
+                              word.count,
+                              emotions,
+                              sent.id=1:length(sentences)
+                              )
+    )
+  }
+}
+
+sentence.list=
+  sentence.list%>%
+  filter(!is.na(word.count)) 
+
+```
+
+**Step 3: Sentence analysis**
+
+```{r}
+sel.comparison=c("DonaldJTrump","HillaryClinton")
+
+par(mar=c(4, 11, 2, 2))
+sentence.list.sel=filter(sentence.list, 
+                         Term==1, File%in%sel.comparison)
+sentence.list.sel$File=factor(sentence.list.sel$File)
+
+sentence.list.sel$FileOrdered=reorder(sentence.list.sel$File, 
+                                  sentence.list.sel$word.count, 
+                                  mean, 
+                                  order=T)
+
+beeswarm(word.count~FileOrdered, 
+         data=sentence.list.sel,
+         horizontal = TRUE, 
+         pch=16, col=alpha(brewer.pal(9, "Set1"), 0.6), 
+         cex=0.55, cex.axis=0.8, cex.lab=0.8,
+         spacing=5/nlevels(sentence.list.sel$FileOrdered),
+         las=2, xlab="Number of words in a sentence.", ylab="",
+         main="Nomination speeches")
+```
+
+**Observation I:** from the Bee swarm plot above, we can see that Donald Trump tended to use more sentences with less than 10 words. Meanwhile, Hillary Clinton adopted more sentences that are between 10 and 20 words. For sentences with more than 20 words, they adopted almost the same amount. Thus, under the assumption and the figure above, we may conclude that Donald Trump's nomination speech is a bit more approachable and emotional than Hillary Clinton's. This implication coincides the fact that Donald Trump was a successful businessman before the election. Moreover, this may be one of the factor that Trump's speech is more infectious although he had only few political experience before.
+
+
+# Part II Sentiment Analysis
+In this part, we will focus on the sentence length variation analysis and emotion scores anaylsis.
+
+**Step 4: Sentence Length Variation**
+
+In this step, We will analyze how Trump and Clinton alternate between long and short sentences and how they shift between different sentiments in their speeches. The underlying assumption is that speeches with more alternations between long and short sentences and more shifts between different sentiments are more emotional.
+
+```{r}
+par(mfrow=c(2,1), mar=c(1,0,2,0), bty="n", xaxt="n", yaxt="n", font.main=1)
+
+f.plotsent.len(In.list=sentence.list, InFile="HillaryClinton", 
+               InType="nomin", InTerm=1, President="Hillary Clinton")
+
+f.plotsent.len(In.list=sentence.list, InFile="DonaldJTrump", 
+               InType="nomin", InTerm=1, President="Donald Trump")
+
+```
+
+**Observation II:** from the plots above, we see that the nomination speech of Donald Trump is more colorful than that of Hillary Clinton. This indicates that Trump's speech has more alternations between long and short sentences and more shifts between different sentiments. Thus, it is another evidence that Trump's speech is more infectious than Hillary's.
+
+**Step 5: Emotion Scores Analysis**
+
+In this step, We will analyze the average emotion scores under Trump and Hillary's speeches. Each sentence is clustered under one or more of these emotions: anger, anticipation, disgust, fear, joy, sadness, surprise and trust. Higher scores of one emotion indicates higher possibility of speaking the sentence under such emotion. 
+
+```{r}
+## Split into two data sets: trump and clinton
+par(mfrow=c(2,1),mar=c(4, 6, 2, 1))
+emo.means.HC=colMeans(select(sentence.list[which(sentence.list$File=="HillaryClinton"),], anger:trust)>0.01)
+emo.means.DJ=colMeans(select(sentence.list[which(sentence.list$File=="DonaldJTrump"),], anger:trust)>0.01)
+col.use=c("red2", "darkgoldenrod1", 
+            "chartreuse3", "blueviolet",
+            "darkgoldenrod2", "dodgerblue3", 
+            "darkgoldenrod1", "darkgoldenrod1")
+barplot(emo.means.HC[order(emo.means.HC)], las=2, 
+        col=col.use[order(emo.means.HC)], horiz=T, 
+        main="Average Emotion Scores of Hillary's Speech")
+
+barplot(emo.means.DJ[order(emo.means.DJ)], las=2, 
+        col=col.use[order(emo.means.DJ)], horiz=T, 
+        main="Average Emotion Scores of Trump's Speech")
+
+```
+
+**Observation III:** from the graphs above, we can observe that both nomination speeches share the most common emotion--trust, which imples that Trump and Hillaryh are confident with themselves. However, scores of anticipation and joy are higher in Hillary's speech, while score of fear are much higher in Trump's speech. One possible indication is that with the same political party of former President Barack Obama, Hillary would most likely remain aligned policy and be optimistic about the future in her speech. On the other hand, Trump, as a Republican, would be doubtful about the policy by Democratic and be pessimistic about the future.
+
+# Part III Topic Modeling
+In this part, we will analyze what topics are emphasized in their speeches seperatly through topic modeling.
+
+**Step 5: Text mining and Text basic processing**
+
+Adapted from <https://eight2late.wordpress.com/2015/09/29/a-gentle-introduction-to-topic-modeling-using-r/>.
+Generate document-term matrices
+
+```{r}
+corpus.list=sentence.list[2:(nrow(sentence.list)-1), ]
+sentence.pre=sentence.list$sentences[1:(nrow(sentence.list)-2)]
+sentence.post=sentence.list$sentences[3:(nrow(sentence.list)-1)]
+corpus.list$snipets=paste(sentence.pre, corpus.list$sentences, sentence.post, sep=" ")
+rm.rows=(1:nrow(corpus.list))[corpus.list$sent.id==1]
+rm.rows=c(rm.rows, rm.rows-1)
+corpus.list=corpus.list[-rm.rows, ]
+
+docs <- Corpus(VectorSource(corpus.list$snipets))
+docs <- tm_map(docs, content_transformer(tolower))
+docs <- tm_map(docs, removePunctuation)
+docs <- tm_map(docs, removeNumbers)
+docs <- tm_map(docs, removeWords, stopwords("english"))
+docs <- tm_map(docs, stripWhitespace)
+
+dtm <- DocumentTermMatrix(docs)
+#convert rownames to filenames#convert rownames to filenames
+rownames(dtm) <- paste(corpus.list$type, corpus.list$File,
+                       corpus.list$Term, corpus.list$sent.id, sep="_")
+
+rowTotals <- apply(dtm , 1, sum) #Find the sum of words in each Document
+
+dtm  <- dtm[rowTotals> 0, ]
+corpus.list=corpus.list[rowTotals>0, ]
+
+```
+
+Run LDA
+```{r}
+#Set parameters for Gibbs sampling
+burnin <- 2000
+iter <- 1000
+thin <- 500
+seed <-list(2003,5,63,100001,765)
+nstart <- 5
+best <- TRUE
+
+#Number of topics
+k <- 15
+
+#Run LDA using Gibbs sampling
+ldaOut <-LDA(dtm, k, method="Gibbs", control=list(nstart=nstart, 
+                                                 seed = seed, best=best,
+                                                 burnin = burnin, iter = iter, 
+                                                 thin=thin))
+#write out results
+#docs to topics
+ldaOut.topics <- as.matrix(topics(ldaOut))
+table(c(1:k, ldaOut.topics))
+write.csv(ldaOut.topics,file=paste("../output/LDAGibbs",k,"DocsToTopics.csv"))
+
+#top 20 terms in each topic
+ldaOut.terms <- as.matrix(terms(ldaOut,20))
+write.csv(ldaOut.terms,file=paste("../output/LDAGibbs",k,"TopicsToTerms.csv"))
+
+#probabilities associated with each topic assignment
+topicProbabilities <- as.data.frame(ldaOut@gamma)
+write.csv(topicProbabilities,file=paste("../output/LDAGibbs",k,"TopicProbabilities.csv"))
+
+terms.beta=ldaOut@beta
+terms.beta=scale(terms.beta)
+topics.terms=NULL
+for(i in 1:k){
+  topics.terms=rbind(topics.terms, ldaOut@terms[order(terms.beta[i,], decreasing = TRUE)[1:7]])
+}
+topics.terms
+ldaOut.terms
+```
+
+Based on the most popular terms and the most salient terms for each topic, we assign a hashtag to each topic manually. (we ignore the names appeared under each topic such as "donald", "trump", "clinton", "hillary")
+
+```{r}
+topics.hash=c("America", "Future", "Failure", "Belief", "Military", "Employment", "Patriotism", "Living", "Government", "Economy", "Equality", "Immigration", "Unity", "Families", "Temporal")
+corpus.list$ldatopic=as.vector(ldaOut.topics)
+corpus.list$ldahash=topics.hash[ldaOut.topics]
+
+colnames(topicProbabilities)=topics.hash
+corpus.list.df=cbind(corpus.list, topicProbabilities)
+
+```
+
+
+Topic Analysis
+```{r, message=FALSE, warning=FALSE}
+topic.summary=tbl_df(corpus.list.df)%>%
+              filter(type%in%c("nomin"), File%in%sel.comparison)%>%
+              select(File, America:Temporal)%>%
+              group_by(File)%>%
+              summarise_each(funs(mean))
+topic.summary=as.data.frame(topic.summary)
+rownames(topic.summary)=topic.summary[,1]
+
+topic.plot=c(2,4,5,10)
+
+par(mfrow=c(2, 1), mar=c(1,1,2,0), bty="n", xaxt="n", yaxt="n")
+
+speech.df=tbl_df(corpus.list.df)%>%filter(File=="DonaldJTrump", type=="nomin",Term==1)%>%select(sent.id, America:Temporal)
+speech.df=as.matrix(speech.df)
+speech.df[,-1]=replace(speech.df[,-1], speech.df[,-1]<1/15, 0.001)
+speech.df[,-1]=f.smooth.topic(x=speech.df[,1], y=speech.df[,-1])
+plot.stacked(speech.df[,1], speech.df[,topic.plot+1], 
+             xlab="Sentences", ylab="Topic share", main="Donald Trump, Nomination")
+
+speech.df=tbl_df(corpus.list.df)%>%filter(File=="HillaryClinton", type=="nomin",Term==1)%>%select(sent.id, America:Temporal)
+speech.df=as.matrix(speech.df)
+speech.df[,-1]=replace(speech.df[,-1], speech.df[,-1]<1/15, 0.001)
+speech.df[,-1]=f.smooth.topic(x=speech.df[,1], y=speech.df[,-1])
+plot.stacked(speech.df[,1], speech.df[,topic.plot+1], 
+             xlab="Sentences", ylab="Topic share", main="Hillary Clinton, Nomination")
+```
+
+**Observation IV:** from the plots above, we can see that Donald Trump emphasized more on sectors of Economy, Military and Future than Hillary Clinton did. On the other hand, Hillary Clinton put more weight on the Belief. We can infer that Trump is more worried about Economy, Military and Future sectors, while Hillary is more concerned about other sectors.
+
+# Conclusion
+From above observations, we may find out some insteresting factors that may lead Donald "trump" Hillary. Firstly, Trump's nomination speech is more approachable, emotional and thus infectious than Hillary's through our sentence analysis and sentiment analysis. Also, query about the former policy by Democratic in Trump's speech may be more welcomed by people. Thirdly, Trump concerns more in the sector of Economy, Military and Future. Just like his declaration during the Election, Trump aims to revitalize industries in America and creat more jobs. 
+
+All in all, although we only analyze the two nomination speeches, we already dig out some difference between Donald Trump and Hillary Clinton. The factors summarized above should be well connected with the temporal background of United States. Thus, although there are still many people opposing Trump as the President, Donald Trump may be the better choice under the willingness of prevailing society.
+
+
+
+
+
+
+
+
